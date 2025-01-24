@@ -234,239 +234,244 @@ open class SwipeCardStack: UIView, SwipeCardDelegate, UIGestureRecognizerDelegat
     }
   }
 
-  /// Returns the most recently swiped card to the top of the card stack.
-  /// - Parameter animated: A boolean indicating whether the undo action should be animated.
-  public func undoLastSwipe(animated: Bool) {
-    if !isEnabled { return }
-    guard let previousSwipe = stateManager.undoSwipe() else { return }
+}
 
-    reloadVisibleCards()
-    delegate?.cardStack?(self, didUndoCardAt: previousSwipe.index, from: previousSwipe.direction)
+extension SwipeCardStack {
+    /// Returns the most recently swiped card to the top of the card stack.
+    /// - Parameter animated: A boolean indicating whether the undo action should be animated.
+    public func undoLastSwipe(animated: Bool) {
+      if !isEnabled { return }
+      guard let previousSwipe = stateManager.undoSwipe() else { return }
 
-    if animated {
-      topCard?.reverseSwipe(from: previousSwipe.direction)
+      reloadVisibleCards()
+      delegate?.cardStack?(self, didUndoCardAt: previousSwipe.index, from: previousSwipe.direction)
+
+      if animated {
+        topCard?.reverseSwipe(from: previousSwipe.direction)
+      }
+
+      isAnimating = true
+      if let topCard = topCard {
+        animator.animateUndo(self,
+                             topCard: topCard,
+                             animated: animated) { [weak self] finished in
+          if finished {
+            self?.isAnimating = false
+          }
+        }
+      }
     }
 
-    isAnimating = true
-    if let topCard = topCard {
-      animator.animateUndo(self,
-                           topCard: topCard,
-                           animated: animated) { [weak self] finished in
+    /// Shifts the remaining cards in the card stack by the specified distance. Any swiped cards are ignored.
+    /// - Parameters:
+    ///   - distance: The distance to shift the remaining cards by.
+    ///   - animated: A boolean indicating whether the undo action should be animated.
+    public func shift(withDistance distance: Int = 1, animated: Bool) {
+      if !isEnabled || distance == 0 || visibleCards.count <= 1 { return }
+
+      stateManager.shift(withDistance: distance)
+      reloadVisibleCards()
+
+      isAnimating = true
+      animator.animateShift(self,
+                            withDistance: distance,
+                            animated: animated) { [weak self] finished in
         if finished {
           self?.isAnimating = false
         }
       }
     }
-  }
 
-  /// Shifts the remaining cards in the card stack by the specified distance. Any swiped cards are ignored.
-  /// - Parameters:
-  ///   - distance: The distance to shift the remaining cards by.
-  ///   - animated: A boolean indicating whether the undo action should be animated.
-  public func shift(withDistance distance: Int = 1, animated: Bool) {
-    if !isEnabled || distance == 0 || visibleCards.count <= 1 { return }
+    // MARK: - Data Source
 
-    stateManager.shift(withDistance: distance)
-    reloadVisibleCards()
+    public func reloadData() {
+      guard let dataSource = dataSource else { return }
+      let numberOfCards = dataSource.numberOfCards(in: self)
+      stateManager.reset(withNumberOfCards: numberOfCards)
+      reloadVisibleCards()
+      isAnimating = false
+    }
 
-    isAnimating = true
-    animator.animateShift(self,
-                          withDistance: distance,
-                          animated: animated) { [weak self] finished in
-      if finished {
-        self?.isAnimating = false
+    /// Returns the `SwipeCard` at the specified index.
+    /// - Parameter index: The index of the card in the data source.
+    /// - Returns: The `SwipeCard` at the specified index, or `nil` if the card is not visible or the index is
+    /// out of range.
+    public func card(forIndexAt index: Int) -> SwipeCard? {
+      for value in visibleCards where value.index == index {
+        return value.card
+      }
+      return nil
+    }
+
+    func reloadVisibleCards() {
+      visibleCards.forEach { $0.card.removeFromSuperview() }
+      visibleCards.removeAll()
+
+      let numberOfCards = min(stateManager.remainingIndices.count, numberOfVisibleCards)
+      for position in 0..<numberOfCards {
+        let index = stateManager.remainingIndices[position]
+        if let card = loadCard(at: index) {
+          insertCard(Card(index: index, card: card), at: position)
+        }
       }
     }
-  }
 
-  // MARK: - Data Source
-
-  public func reloadData() {
-    guard let dataSource = dataSource else { return }
-    let numberOfCards = dataSource.numberOfCards(in: self)
-    stateManager.reset(withNumberOfCards: numberOfCards)
-    reloadVisibleCards()
-    isAnimating = false
-  }
-
-  /// Returns the `SwipeCard` at the specified index.
-  /// - Parameter index: The index of the card in the data source.
-  /// - Returns: The `SwipeCard` at the specified index, or `nil` if the card is not visible or the index is
-  /// out of range.
-  public func card(forIndexAt index: Int) -> SwipeCard? {
-    for value in visibleCards where value.index == index {
-      return value.card
+    func insertCard(_ value: Card, at position: Int) {
+      cardContainer.insertSubview(value.card, at: visibleCards.count - position)
+      layoutCard(value.card, at: position)
+      visibleCards.insert(value, at: position)
     }
-    return nil
-  }
 
-  func reloadVisibleCards() {
-    visibleCards.forEach { $0.card.removeFromSuperview() }
-    visibleCards.removeAll()
+    func loadCard(at index: Int) -> SwipeCard? {
+      let card = dataSource?.cardStack(self, cardForIndexAt: index)
+      card?.delegate = self
+      card?.panGestureRecognizer.delegate = self
+      return card
+    }
 
-    let numberOfCards = min(stateManager.remainingIndices.count, numberOfVisibleCards)
-    for position in 0..<numberOfCards {
-      let index = stateManager.remainingIndices[position]
-      if let card = loadCard(at: index) {
-        insertCard(Card(index: index, card: card), at: position)
+    // MARK: - State Management
+
+    /// Returns the current position of the card at the specified index.
+    ///
+    /// A returned value of `0` indicates that the card is the topmost card in the stack.
+    /// - Parameter index: The index of the card in the data source.
+    /// - Returns: The current position of the card at the specified index, or `nil` if the index if out of range or the
+    /// card has been swiped.
+    public func positionforCard(at index: Int) -> Int? {
+      return stateManager.remainingIndices.firstIndex(of: index)
+    }
+
+    /// Returns the remaining number of cards in the card stack.
+    /// - Returns: The number of cards in the card stack which have not yet been swiped.
+    public func numberOfRemainingCards() -> Int {
+      return stateManager.remainingIndices.count
+    }
+
+    /// Returns the indices of the swiped cards in the order they were swiped.
+    /// - Returns: The indices of the swiped cards in the data source.
+    public func swipedCards() -> [Int] {
+      return stateManager.swipes.map { $0.index }
+    }
+
+    /// Inserts a new card with the given index at the specified position.
+    ///
+    /// Calling this method will not clear the swipe history nor trigger a reload of the data source.
+    /// - Parameters:
+    ///   - index: The index of the card in the data source.
+    ///   - position: The position of the new card in the card stack.
+    public func insertCard(atIndex index: Int, position: Int) {
+      guard let dataSource = dataSource else { return }
+
+      let oldNumberOfCards = stateManager.totalIndexCount
+      let newNumberOfCards = dataSource.numberOfCards(in: self)
+
+      stateManager.insert(index, at: position)
+
+      if newNumberOfCards != oldNumberOfCards + 1 {
+        let errorString = StringUtils.createInvalidUpdateErrorString(newCount: newNumberOfCards,
+                                                                     oldCount: oldNumberOfCards,
+                                                                     insertedCount: 1)
+        fatalError(errorString)
+      }
+
+      reloadVisibleCards()
+    }
+
+    /// Appends a collection of new cards with the specifed indices to the bottom of the card stack.
+    ///
+    /// Calling this method will not clear the swipe history nor trigger a reload of the data source.
+    /// - Parameter indices: The indices of the cards in the data source.
+    public func appendCards(atIndices indices: [Int]) {
+      guard let dataSource = dataSource else { return }
+
+      let oldNumberOfCards = stateManager.totalIndexCount
+      let newNumberOfCards = dataSource.numberOfCards(in: self)
+
+      for index in indices {
+        stateManager.insert(index, at: numberOfRemainingCards())
+      }
+
+      if newNumberOfCards != oldNumberOfCards + indices.count {
+        let errorString = StringUtils.createInvalidUpdateErrorString(newCount: newNumberOfCards,
+                                                                     oldCount: oldNumberOfCards,
+                                                                     insertedCount: indices.count)
+        fatalError(errorString)
+      }
+
+      reloadVisibleCards()
+    }
+}
+
+extension SwipeCardStack {
+    /// Deletes the cards at the specified indices. If an index corresponds to a card that has been swiped,
+    /// it is removed from the swipe history.
+    ///
+    /// Calling this method will not clear the swipe history nor trigger a reload of the data source.
+    /// - Parameter indices: The indices of the cards in the data source to delete.
+    public func deleteCards(atIndices indices: [Int]) {
+      guard let dataSource = dataSource else { return }
+
+      let oldNumberOfCards = stateManager.totalIndexCount
+      let newNumberOfCards = dataSource.numberOfCards(in: self)
+
+      if newNumberOfCards != oldNumberOfCards - indices.count {
+        let errorString = StringUtils.createInvalidUpdateErrorString(newCount: newNumberOfCards,
+                                                                     oldCount: oldNumberOfCards,
+                                                                     deletedCount: indices.count)
+        fatalError(errorString)
+      }
+
+      stateManager.delete(indices)
+      reloadVisibleCards()
+    }
+
+    /// Deletes the cards at the specified positions in the card stack.
+    ///
+    /// Calling this method will not clear the swipe history nor trigger a reload of the data source.
+    /// - Parameter positions: The positions of the cards to delete in the card stack.
+    public func deleteCards(atPositions positions: [Int]) {
+      guard let dataSource = dataSource else { return }
+
+      let oldNumberOfCards = stateManager.totalIndexCount
+      let newNumberOfCards = dataSource.numberOfCards(in: self)
+
+      if newNumberOfCards != oldNumberOfCards - positions.count {
+        let errorString = StringUtils.createInvalidUpdateErrorString(newCount: newNumberOfCards,
+                                                                     oldCount: oldNumberOfCards,
+                                                                     deletedCount: positions.count)
+        fatalError(errorString)
+      }
+
+      stateManager.delete(indicesAtPositions: positions)
+      reloadVisibleCards()
+    }
+
+    // MARK: - SwipeCardDelegate
+
+    func cardDidTap(_ card: SwipeCard) {
+      guard let topCardIndex = topCardIndex else { return }
+      delegate?.cardStack?(self, didSelectCardAt: topCardIndex)
+    }
+
+    func cardDidBeginSwipe(_ card: SwipeCard) {
+      animator.removeBackgroundCardAnimations(self)
+    }
+
+    func cardDidContinueSwipe(_ card: SwipeCard) {
+      for (position, backgroundCard) in backgroundCards.enumerated() {
+        backgroundCard.transform = backgroundCardDragTransform(topCard: card, currentPosition: position + 1)
       }
     }
-  }
 
-  func insertCard(_ value: Card, at position: Int) {
-    cardContainer.insertSubview(value.card, at: visibleCards.count - position)
-    layoutCard(value.card, at: position)
-    visibleCards.insert(value, at: position)
-  }
-
-  func loadCard(at index: Int) -> SwipeCard? {
-    let card = dataSource?.cardStack(self, cardForIndexAt: index)
-    card?.delegate = self
-    card?.panGestureRecognizer.delegate = self
-    return card
-  }
-
-  // MARK: - State Management
-
-  /// Returns the current position of the card at the specified index.
-  ///
-  /// A returned value of `0` indicates that the card is the topmost card in the stack.
-  /// - Parameter index: The index of the card in the data source.
-  /// - Returns: The current position of the card at the specified index, or `nil` if the index if out of range or the
-  /// card has been swiped.
-  public func positionforCard(at index: Int) -> Int? {
-    return stateManager.remainingIndices.firstIndex(of: index)
-  }
-
-  /// Returns the remaining number of cards in the card stack.
-  /// - Returns: The number of cards in the card stack which have not yet been swiped.
-  public func numberOfRemainingCards() -> Int {
-    return stateManager.remainingIndices.count
-  }
-
-  /// Returns the indices of the swiped cards in the order they were swiped.
-  /// - Returns: The indices of the swiped cards in the data source.
-  public func swipedCards() -> [Int] {
-    return stateManager.swipes.map { $0.index }
-  }
-
-  /// Inserts a new card with the given index at the specified position.
-  ///
-  /// Calling this method will not clear the swipe history nor trigger a reload of the data source.
-  /// - Parameters:
-  ///   - index: The index of the card in the data source.
-  ///   - position: The position of the new card in the card stack.
-  public func insertCard(atIndex index: Int, position: Int) {
-    guard let dataSource = dataSource else { return }
-
-    let oldNumberOfCards = stateManager.totalIndexCount
-    let newNumberOfCards = dataSource.numberOfCards(in: self)
-
-    stateManager.insert(index, at: position)
-
-    if newNumberOfCards != oldNumberOfCards + 1 {
-      let errorString = StringUtils.createInvalidUpdateErrorString(newCount: newNumberOfCards,
-                                                                   oldCount: oldNumberOfCards,
-                                                                   insertedCount: 1)
-      fatalError(errorString)
+    func cardDidCancelSwipe(_ card: SwipeCard) {
+      animator.animateReset(self, topCard: card)
     }
 
-    reloadVisibleCards()
-  }
-
-  /// Appends a collection of new cards with the specifed indices to the bottom of the card stack.
-  ///
-  /// Calling this method will not clear the swipe history nor trigger a reload of the data source.
-  /// - Parameter indices: The indices of the cards in the data source.
-  public func appendCards(atIndices indices: [Int]) {
-    guard let dataSource = dataSource else { return }
-
-    let oldNumberOfCards = stateManager.totalIndexCount
-    let newNumberOfCards = dataSource.numberOfCards(in: self)
-
-    for index in indices {
-      stateManager.insert(index, at: numberOfRemainingCards())
+    func cardDidFinishSwipeAnimation(_ card: SwipeCard) {
+      card.removeFromSuperview()
     }
 
-    if newNumberOfCards != oldNumberOfCards + indices.count {
-      let errorString = StringUtils.createInvalidUpdateErrorString(newCount: newNumberOfCards,
-                                                                   oldCount: oldNumberOfCards,
-                                                                   insertedCount: indices.count)
-      fatalError(errorString)
+    func cardDidSwipe(_ card: SwipeCard, withDirection direction: SwipeDirection) {
+      swipeAction(topCard: card, direction: direction, forced: false, animated: true)
     }
-
-    reloadVisibleCards()
-  }
-
-  /// Deletes the cards at the specified indices. If an index corresponds to a card that has been swiped,
-  /// it is removed from the swipe history.
-  ///
-  /// Calling this method will not clear the swipe history nor trigger a reload of the data source.
-  /// - Parameter indices: The indices of the cards in the data source to delete.
-  public func deleteCards(atIndices indices: [Int]) {
-    guard let dataSource = dataSource else { return }
-
-    let oldNumberOfCards = stateManager.totalIndexCount
-    let newNumberOfCards = dataSource.numberOfCards(in: self)
-
-    if newNumberOfCards != oldNumberOfCards - indices.count {
-      let errorString = StringUtils.createInvalidUpdateErrorString(newCount: newNumberOfCards,
-                                                                   oldCount: oldNumberOfCards,
-                                                                   deletedCount: indices.count)
-      fatalError(errorString)
-    }
-
-    stateManager.delete(indices)
-    reloadVisibleCards()
-  }
-
-  /// Deletes the cards at the specified positions in the card stack.
-  ///
-  /// Calling this method will not clear the swipe history nor trigger a reload of the data source.
-  /// - Parameter positions: The positions of the cards to delete in the card stack.
-  public func deleteCards(atPositions positions: [Int]) {
-    guard let dataSource = dataSource else { return }
-
-    let oldNumberOfCards = stateManager.totalIndexCount
-    let newNumberOfCards = dataSource.numberOfCards(in: self)
-
-    if newNumberOfCards != oldNumberOfCards - positions.count {
-      let errorString = StringUtils.createInvalidUpdateErrorString(newCount: newNumberOfCards,
-                                                                   oldCount: oldNumberOfCards,
-                                                                   deletedCount: positions.count)
-      fatalError(errorString)
-    }
-
-    stateManager.delete(indicesAtPositions: positions)
-    reloadVisibleCards()
-  }
-
-  // MARK: - SwipeCardDelegate
-
-  func cardDidTap(_ card: SwipeCard) {
-    guard let topCardIndex = topCardIndex else { return }
-    delegate?.cardStack?(self, didSelectCardAt: topCardIndex)
-  }
-
-  func cardDidBeginSwipe(_ card: SwipeCard) {
-    animator.removeBackgroundCardAnimations(self)
-  }
-
-  func cardDidContinueSwipe(_ card: SwipeCard) {
-    for (position, backgroundCard) in backgroundCards.enumerated() {
-      backgroundCard.transform = backgroundCardDragTransform(topCard: card, currentPosition: position + 1)
-    }
-  }
-
-  func cardDidCancelSwipe(_ card: SwipeCard) {
-    animator.animateReset(self, topCard: card)
-  }
-
-  func cardDidFinishSwipeAnimation(_ card: SwipeCard) {
-    card.removeFromSuperview()
-  }
-
-  func cardDidSwipe(_ card: SwipeCard, withDirection direction: SwipeDirection) {
-    swipeAction(topCard: card, direction: direction, forced: false, animated: true)
-  }
 }

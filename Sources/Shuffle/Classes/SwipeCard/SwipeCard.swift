@@ -27,7 +27,8 @@ import UIKit
 open class SwipeCard: SwipeView {
 
   open var animationOptions = CardAnimationOptions()
-
+open var swipeDirectionCallback: (() -> ())?
+    open var cancelSwipeCallback: (() -> ())?
   /// The the main content view.
   public var content: UIView? {
     didSet {
@@ -166,12 +167,12 @@ open class SwipeCard: SwipeView {
   override open func continueSwiping(_ recognizer: UIPanGestureRecognizer) {
     super.continueSwiping(recognizer)
     delegate?.cardDidContinueSwipe(self)
-
     transform = swipeTransform()
 
     for (direction, overlay) in overlays {
       overlay.alpha = swipeOverlayPercentage(forDirection: direction)
     }
+      self.swipeDirectionCallback?()
   }
 
   override open func didSwipe(_ recognizer: UIPanGestureRecognizer,
@@ -185,6 +186,7 @@ open class SwipeCard: SwipeView {
     super.didCancelSwipe(recognizer)
     delegate?.cardDidCancelSwipe(self)
     animator.animateReset(on: self)
+      self.cancelSwipeCallback?()
   }
 
   // MARK: - Main Methods
